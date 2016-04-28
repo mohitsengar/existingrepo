@@ -1,0 +1,113 @@
+USE [TestRefData]
+GO
+/****** Object:  StoredProcedure [dbo].[sproc_PopulateEnterpriseCodeMappingDataForMarketType]    Script Date: 04/12/2016 16:57:51 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+ALTER PROCEDURE [dbo].[sproc_PopulateEnterpriseCodeMappingDataForMarketType] @passedTableName AS nvarchar(255),
+@enterprise_code_mapping_id nvarchar(40),
+@feedProviderId AS nvarchar(20),--for ex openbetid = 1 
+@mappingType AS nvarchar(20),--Mapping Type = 'EVENTTYPE'
+@feedProviderIdColumnName AS nvarchar(255),-- for ex 'openbet_id'
+@feedProviderIdColumnDisplayName AS nvarchar(255)-- for ex 'openbet_display_name'
+AS
+BEGIN
+  DECLARE @my_cur CURSOR
+  DECLARE @cur_id nvarchar(50)
+  DECLARE @cur_rowStatus nvarchar(2)
+  DECLARE @cur_feedProviderId nvarchar(50)
+  DECLARE @cur_feedProviderName nvarchar(100)
+  DECLARE @vquery nvarchar(max)
+  DECLARE @vsql nvarchar(max)
+  DECLARE @main_curs AS CURSOR
+  DECLARE @cur_eventType nvarchar(max)
+  DECLARE @cur_eventSubType nvarchar(max)
+  DECLARE @cur_marketTypeName nvarchar(max)
+
+  SET @vquery = 'SELECT [row status],' + @feedProviderIdColumnName + ',' + @feedProviderIdColumnDisplayName + ',[Event type],
+    		  [Event sub type],[Market type name] FROM ' + @passedTableName + '
+              where  [Row status] in ( ''N'',''U'',''D'') and ' + @feedProviderIdColumnName + ' is  not null'
+  SET @vsql = 'set @cursor = cursor forward_only static for ' + @vquery + ' open @cursor;'
+  EXEC sys.sp_executesql @vsql,
+                         N'@cursor cursor output',
+                         @main_curs OUTPUT
+
+  FETCH NEXT FROM @main_curs INTO @cur_rowStatus, @cur_feedProviderId, @cur_feedProviderName, @cur_eventType, @cur_eventSubType, @cur_marketTypeName
+  
+  WHILE @@FETCH_STATUS = 0
+  BEGIN
+    IF (@mappingType = 'MARKETTYPE ET')
+      SET @cur_id = @cur_eventType + ' # ' + @cur_marketTypeName
+    ELSE
+    IF (@mappingType = 'MARKETTYPE EST')
+      SET @cur_id = @cur_eventType + ' # ' + @cur_eventSubType + ' # ' + @cur_marketTypeName
+
+    IF @cur_feedProviderId <> ''
+      OR @cur_feedProviderName <> ''
+    BEGIN
+      IF (@cur_rowStatus = 'N')
+      BEGIN
+        IF EXISTS (SELECT
+            *
+          FROM [EnterpriseCodeMapping$] ecm
+          WHERE ecm.[Ladbrokes code] = @cur_id
+          AND ecm.[Organisation code] = @cur_feedProviderId
+          AND ecm.[Mapping type code] = @mappingType
+          AND ecm.[Organisation id] = @feedProviderId)
+          UPDATE [EnterpriseCodeMapping$]
+          SET [row status] = @cur_rowStatus,
+              [display name] = @cur_feedProviderName
+          WHERE [Ladbrokes code] = @cur_id
+          AND [Organisation code] = @cur_feedProviderId
+          AND [Mapping type code] = @mappingType
+          AND [Organisation id] = @feedProviderId
+        ELSE
+          INSERT INTO dbo.[EnterpriseCodeMapping$] ([enterprise code mapping id], [row status], [organisation id],
+          [mapping type code], [organisation code], [ladbrokes code], [display name])
+            SELECT
+              @enterprise_code_mapping_id,
+              @cur_rowStatus,
+              @feedProviderId,
+              @mappingType,
+              @cur_feedProviderId,
+              @cur_id,
+              @cur_feedProviderName
+      END
+      ELSE
+      BEGIN
+        IF EXISTS (SELECT
+            *
+          FROM [EnterpriseCodeMapping$] ecm
+          WHERE ecm.[Ladbrokes code] = @cur_id
+          AND ecm.[Mapping type code] = @mappingType
+          AND ecm.[Organisation id] = @feedProviderId)
+          UPDATE [EnterpriseCodeMapping$]
+          SET [row status] = @cur_rowStatus,
+              [display name] = @cur_feedProviderName,
+              [Organisation code] = @cur_feedProviderId
+          WHERE [Ladbrokes code] = @cur_id
+          AND [Mapping type code] = @mappingType
+          AND [Organisation id] = @feedProviderId
+        ELSE
+        IF (@cur_rowStatus = 'U')
+          INSERT INTO dbo.[EnterpriseCodeMapping$] ([enterprise code mapping id], [row status], [organisation id],
+          [mapping type code], [organisation code], [ladbrokes code], [display name])
+            SELECT
+              @enterprise_code_mapping_id,
+              'N',
+              @feedProviderId,
+              @mappingType,
+              @cur_feedProviderId,
+              @cur_id,
+              @cur_feedProviderName
+      END
+      SET @enterprise_code_mapping_id = @enterprise_code_mapping_id + 1
+    END
+    
+    FETCH NEXT FROM @main_curs INTO @cur_rowStatus, @cur_feedProviderId, @cur_feedProviderName, @cur_eventType, @cur_eventSubType, @cur_marketTypeName;
+  END
+
+  CLOSE @main_curs
+  DEALLOCATE @main_curs
+END
